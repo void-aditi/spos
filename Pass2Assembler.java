@@ -1,31 +1,25 @@
+// Pass2Assembler.java
+// Generates Pass-2 output in exactly the required format.
+// Works on Linux: javac Pass2Assembler.java && java Pass2Assembler > pass2.txt
+
 import java.io.*;
 import java.util.*;
 
 public class Pass2Assembler {
 
     static class Symbol {
-        String symName;   // actual symbol (like LOOP)
-        String sName;     // symbolic name (like S1)
+        String sym, sName;
         int addr;
-
-        Symbol(String symName, String sName, int addr) {
-            this.symName = symName;
-            this.sName = sName;
-            this.addr = addr;
+        Symbol(String sym, String sName, int addr) {
+            this.sym = sym; this.sName = sName; this.addr = addr;
         }
     }
 
     static class Literal {
-        String lit;
-        int addr;
-
-        Literal(String l, int a) {
-            lit = l;
-            addr = a;
-        }
+        String lit; int addr;
+        Literal(String lit, int addr) { this.lit = lit; this.addr = addr; }
     }
 
-    // opcode table (two-digit strings)
     static Map<Integer, String> opcodeMap = new HashMap<>();
     static {
         for (int i = 0; i <= 20; i++)
@@ -33,119 +27,107 @@ public class Pass2Assembler {
     }
 
     public static void main(String[] args) throws Exception {
-        // -------------------- Read IC --------------------
-        List<String> icLines = new ArrayList<>();
+
+        // ---------- Read IC ----------
+        List<String> IC = new ArrayList<>();
         try (BufferedReader br = new BufferedReader(new FileReader("IC.txt"))) {
             String line;
-            boolean skipHeader = true;
             while ((line = br.readLine()) != null) {
                 line = line.trim();
-                if (skipHeader && line.startsWith("LC")) { skipHeader = false; continue; }
-                if (!line.isEmpty() && !line.startsWith("*")) icLines.add(line);
+                if (line.isEmpty() || line.startsWith("*") || line.startsWith("LC")) continue;
+                IC.add(line);
             }
         }
 
-        // -------------------- Read SYMTAB --------------------
+        // ---------- Read SYMTAB ----------
         List<Symbol> SYMTAB = new ArrayList<>();
         try (BufferedReader br = new BufferedReader(new FileReader("SYMTAB.txt"))) {
             String line;
             while ((line = br.readLine()) != null) {
                 line = line.trim();
-                if (line.isEmpty()) continue;
-                if (!line.matches("^\\d+.*")) continue; // skip headers and stars
-                String[] tok = line.split("\\s+");
-                if (tok.length >= 4) {
-                    String sym = tok[1];
-                    String sName = tok[2];
-                    int addr = Integer.parseInt(tok[3]);
-                    SYMTAB.add(new Symbol(sym, sName, addr));
-                }
+                if (line.isEmpty() || line.toUpperCase().contains("SYMBOL")) continue;
+                String[] t = line.split("\\s+");
+                if (t.length >= 3)
+                    SYMTAB.add(new Symbol(t[0], t[1], Integer.parseInt(t[2])));
             }
         }
 
-        // -------------------- Read LITTAB --------------------
+        // ---------- Read LITTAB ----------
         List<Literal> LITTAB = new ArrayList<>();
         try (BufferedReader br = new BufferedReader(new FileReader("LITTAB.txt"))) {
             String line;
             while ((line = br.readLine()) != null) {
                 line = line.trim();
-                if (line.isEmpty()) continue;
-                if (!line.matches("^\\d+.*")) continue; // skip headers and stars
-                String[] tok = line.split("\\s+");
-                if (tok.length >= 3) {
-                    String lit = tok[1];
-                    int addr = Integer.parseInt(tok[2]);
-                    LITTAB.add(new Literal(lit, addr));
-                }
+                if (line.isEmpty() || line.toUpperCase().contains("LITERAL")) continue;
+                String[] t = line.split("\\s+");
+                if (t.length >= 3)
+                    LITTAB.add(new Literal(t[1], Integer.parseInt(t[2])));
             }
         }
 
-        // -------------------- Generate Machine Code --------------------
-        System.out.printf("%-6s %-45s %-20s%n", "LC", "INTERMEDIATE CODE", "MACHINE CODE");
+        // ---------- Print Header ----------
+        System.out.printf("%-7s %-45s %-20s%n", "LC", "INTERMEDIATE CODE", "LC\tMACHINE CODE");
         System.out.println("----------------------------------------------------------------------------");
 
-        for (String raw : icLines) {
-            String lcStr = "";
-            String icPart = raw;
-
-            // extract LC if present
-            String[] split = raw.split("\\s+", 2);
-            if (split.length >= 1 && split[0].matches("\\d+")) {
-                lcStr = split[0];
-                if (split.length == 2) icPart = split[1].trim();
-            }
-
+        // ---------- Generate MC ----------
+        for (String raw : IC) {
+            String lc = "";
+            String ic = raw;
             String mc = "-";
 
-            if (icPart.contains("(AD")) mc = "-"; // assembler directive → no MC
-            else if (icPart.contains("(DL")) {    // declarative
-                String constVal = null;
-                if (icPart.contains("(C,")) {
-                    constVal = icPart.substring(icPart.indexOf("(C,") + 3,
-                            icPart.indexOf(")", icPart.indexOf("(C,")));
-                }
-                mc = "00 00 " + (constVal == null ? "000" : constVal);
-            } else if (icPart.contains("(IS")) { // imperative
+            // extract LC if present
+            String[] parts = raw.split("\\s+", 2);
+            if (parts.length > 0 && parts[0].matches("\\d+")) {
+                lc = parts[0];
+                if (parts.length == 2) ic = parts[1];
+            }
+
+            if (ic.contains("(AD")) {
+                mc = "-";
+            } else if (ic.contains("(DL")) {
+                String val = "000";
+                int s = ic.indexOf("(C,");
+                if (s != -1)
+                    val = ic.substring(s + 3, ic.indexOf(")", s));
+                mc = "00 00 " + val;
+            } else if (ic.contains("(IS")) {
                 String opcode = "00", reg = "00", addr = "000";
 
-                // extract opcode
                 try {
-                    int start = icPart.indexOf("(IS,") + 4;
-                    int end = icPart.indexOf(")", start);
-                    int opnum = Integer.parseInt(icPart.substring(start, end));
-                    opcode = opcodeMap.getOrDefault(opnum, String.format("%02d", opnum));
+                    int s = ic.indexOf("(IS,") + 4;
+                    int e = ic.indexOf(")", s);
+                    int num = Integer.parseInt(ic.substring(s, e));
+                    opcode = opcodeMap.get(num);
                 } catch (Exception ignore) {}
 
-                // extract operands
-                String[] tokens = icPart.split("\\)");
+                String[] tokens = ic.split("\\)");
                 for (String t : tokens) {
-                    if (t.contains("(")) t = t.substring(t.indexOf("(") + 1);
-                    String[] sub = t.split(",", 2);
-                    if (sub.length != 2) continue;
-
-                    String tag = sub[0].trim();
-                    String val = sub[1].trim();
+                    if (!t.contains("(")) continue;
+                    t = t.substring(t.indexOf("(") + 1);
+                    String[] sub = t.split(",");
+                    if (sub.length < 2) continue;
+                    String tag = sub[0].trim(), val = sub[1].trim();
 
                     if (tag.equalsIgnoreCase("RG") || tag.equalsIgnoreCase("R"))
-                        reg = val.length() == 1 ? "0" + val : val;
+                        reg = (val.length() == 1) ? "0" + val : val;
                     else if (tag.equalsIgnoreCase("S")) {
-                        // lookup symbol address from SYMTAB
-                        for (Symbol s : SYMTAB) {
-                            if (s.sName.equalsIgnoreCase(val)) { addr = String.valueOf(s.addr); break; }
-                        }
+                        for (Symbol s : SYMTAB)
+                            if (s.sName.equalsIgnoreCase(val))
+                                addr = String.valueOf(s.addr);
                     } else if (tag.equalsIgnoreCase("L")) {
-                        // lookup literal address from LITTAB
                         try {
-                            int idx = Integer.parseInt(val.substring(1)) - 1;
-                            if (idx >= 0 && idx < LITTAB.size()) addr = String.valueOf(LITTAB.get(idx).addr);
+                            int i = Integer.parseInt(val.substring(1)) - 1;
+                            addr = String.valueOf(LITTAB.get(i).addr);
                         } catch (Exception ignore) {}
                     } else if (tag.equalsIgnoreCase("C")) addr = val;
                 }
-
                 mc = opcode + " " + reg + " " + addr;
             }
 
-            System.out.printf("%-6s %-45s %-20s%n", lcStr, icPart, mc);
+            String fullMC = (mc.equals("-") || lc.isEmpty()) ? mc : lc + "\t" + mc;
+            System.out.printf("%-7s %-45s %-20s%n", lc, ic, fullMC);
         }
+
+        System.out.println("\nProgram finished execution.");
     }
 }
